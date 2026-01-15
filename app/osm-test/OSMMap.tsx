@@ -79,27 +79,35 @@ export default function OSMMap() {
 
 
   async function fetchGraphHopperLoop(
-  start: LatLngExpression,
-  distanceKm: number
+    start: LatLngExpression,
+    distanceKm: number
   ) {
     const [startLat, startLng] = start as [number, number];
-    const tolerance = 0.1; // ±10%
-    const maxAttempts = 5;
-    const delayMs = 1500; // 1 second between attempts to respect rate limit
-    let bestRoute: { coords: LatLngExpression[]; distanceKm: number } | null = null;
+    const tolerance = 0.1;
+    const maxAttempts = 3;
+    const delayMs = 2000;
+
+    let bestRoute: {
+      coords: LatLngExpression[];
+      distanceKm: number;
+    } | null = null;
+
+    const baseRadius = distanceKm * 1000 * 0.16;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      // Generate a random midpoint for the loop
-      const bearing = Math.random() * 360;
-      const mid = destinationPoint(
-        start as [number, number],
-        (distanceKm * 1000) / 2,
-        bearing
-      );
+      const baseBearing = (Math.random() * 360 + attempt * 45) % 360;
+      const radiusMeters = baseRadius * (1 - attempt * 0.12);
+      
+      const wp1 = destinationPoint(start as [number, number], radiusMeters, baseBearing);
+      const wp2 = destinationPoint(start as [number, number], radiusMeters, baseBearing + 120);
+      const wp3 = destinationPoint(start as [number, number], radiusMeters, baseBearing + 240);
 
-      const url = `https://graphhopper.com/api/1/route` +
+      const url =
+        `https://graphhopper.com/api/1/route` +
         `?point=${startLat},${startLng}` +
-        `&point=${mid[0]},${mid[1]}` +
+        `&point=${wp1[0]},${wp1[1]}` +
+        `&point=${wp2[0]},${wp2[1]}` +
+        `&point=${wp3[0]},${wp3[1]}` +
         `&point=${startLat},${startLng}` +
         `&profile=foot` +
         `&points_encoded=false` +
@@ -109,49 +117,46 @@ export default function OSMMap() {
         const res = await fetch(url);
         const data = await res.json();
 
-        if (!data.paths || data.paths.length === 0) {
-          console.warn(`Attempt ${attempt + 1}: no path returned`);
-          // Wait before next attempt
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        if (!data.paths?.length) {
+          await new Promise((r) => setTimeout(r, delayMs));
           continue;
         }
 
         const path = data.paths[0];
         const actualKm = path.distance / 1000;
+
         const coords = path.points.coordinates.map(
           ([lng, lat]: [number, number]) => [lat, lng]
         );
 
         const error = Math.abs(actualKm - distanceKm);
 
-        // Accept if within tolerance, else track closest
-        if (actualKm >= distanceKm * (1 - tolerance) &&
-            actualKm <= distanceKm * (1 + tolerance)) {
+        if (
+          actualKm >= distanceKm * (1 - tolerance) &&
+          actualKm <= distanceKm * (1 + tolerance)
+        ) {
           console.log(`Accepted route on attempt ${attempt + 1}: ${actualKm.toFixed(2)} km`);
           setRoute(coords);
           return;
-        } else {
-          if (!bestRoute || error < Math.abs(bestRoute.distanceKm - distanceKm)) {
-            bestRoute = { coords, distanceKm: actualKm };
-          }
-          console.log(`Attempt ${attempt + 1}: ${actualKm.toFixed(2)} km (outside tolerance)`);
         }
 
+        if (!bestRoute || error < Math.abs(bestRoute.distanceKm - distanceKm)) {
+          bestRoute = { coords, distanceKm: actualKm };
+        }
+
+        console.log(`Attempt ${attempt + 1}: ${actualKm.toFixed(2)} km`);
       } catch (err) {
-        console.error(`Error fetching GraphHopper route on attempt ${attempt + 1}:`, err);
+        console.error("GraphHopper error:", err);
       }
 
-      // Wait before next attempt to avoid exceeding rate limit
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await new Promise((r) => setTimeout(r, delayMs));
     }
 
-    // Use best match if none were within tolerance
     if (bestRoute) {
-      console.warn(`Using closest match after ${maxAttempts} attempts: ${bestRoute.distanceKm.toFixed(2)} km`);
+      console.warn(`Using closest match: ${bestRoute.distanceKm.toFixed(2)} km`);
       setRoute(bestRoute.coords);
     }
   }
-
 
   return (
     <MapContainer
