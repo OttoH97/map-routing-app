@@ -50,8 +50,27 @@ function RecenterMap({ position }: { position: LatLngExpression }) {
 }
 
 export default function OSMMap() {
-  const [position, setPosition] = useState<LatLngExpression | null>(null);
+    const [position, setPosition] = useState<LatLngExpression | null>(null);
   const [route, setRoute] = useState<LatLngExpression[] | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [cooldownRemaining, setCooldownRemaining] = useState(0);
+
+  // Cooldown countdown timer
+  useEffect(() => {
+    if (cooldownRemaining <= 0) return;
+
+    const interval = setInterval(() => {
+      setCooldownRemaining((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [cooldownRemaining]);
 
   useEffect(() => {
     if (!navigator.geolocation) return;
@@ -64,14 +83,25 @@ export default function OSMMap() {
         ];
         setPosition(start);
 
-        // Fetch a pedestrian loop via GraphHopper
-        fetchGraphHopperLoop(start, 5); // 5 km target distance
+                // Fetch a pedestrian loop via GraphHopper
+        handleReroute();
       },
       () => {
         setPosition(DEFAULT_POSITION);
       }
     );
   }, []);
+
+    async function handleReroute() {
+    if (!position || isGenerating || cooldownRemaining > 0) return;
+    setIsGenerating(true);
+    setCooldownRemaining(10); // Start 10 second cooldown
+    try {
+      await fetchGraphHopperLoop(position, 5); // 5 km target distance
+    } finally {
+      setIsGenerating(false);
+    }
+  }
 
   function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -158,28 +188,47 @@ export default function OSMMap() {
     }
   }
 
-  return (
-    <MapContainer
-      center={position ?? DEFAULT_POSITION}
-      zoom={15}
-      style={{ height: "400px", width: "100%" }}
-    >
-      <TileLayer
-        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        attribution="© OpenStreetMap contributors"
-      />
+    return (
+    <>
+      <MapContainer
+        center={position ?? DEFAULT_POSITION}
+        zoom={15}
+        style={{ height: "400px", width: "100%" }}
+      >
+        <TileLayer
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution="© OpenStreetMap contributors"
+        />
 
-      {position && (
-        <>
-          <RecenterMap position={position} />
+        {position && (
+          <>
+            <RecenterMap position={position} />
 
-          <Marker position={position}>
-            <Popup>Start / Finish 📍</Popup>
-          </Marker>
-        </>
-      )}
+            <Marker position={position}>
+              <Popup>Start / Finish 📍</Popup>
+            </Marker>
+          </>
+        )}
 
-      {route && <Polyline positions={route} />}
-    </MapContainer>
+        {route && <Polyline positions={route} />}
+      </MapContainer>
+
+            <button
+        onClick={handleReroute}
+        disabled={isGenerating || !position || cooldownRemaining > 0}
+        style={{
+          marginTop: "0.5rem",
+          padding: "0.5rem 1rem",
+          cursor: (position && cooldownRemaining === 0) ? "pointer" : "not-allowed",
+          opacity: position && cooldownRemaining === 0 ? 1 : 0.5,
+        }}
+      >
+                {isGenerating 
+          ? "Generating route..." 
+          : cooldownRemaining > 0 
+            ? `⏳ Cooldown: ${cooldownRemaining}s` 
+            : "🔄 Reroute"}
+      </button>
+    </>
   );
 }
