@@ -1,59 +1,55 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  MapContainer,
-  TileLayer,
-  Marker,
-  Popup,
-  Polyline,
-  useMap,
-} from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, Polyline } from "react-leaflet";
 import type { LatLngExpression } from "leaflet";
+import L from "leaflet";
 import "./leafletIconFix";
+import { DEFAULT_POSITION } from "./components/RecenterMap";
+import { MapClickHandler } from "./components/MapClickHandler";
+import { generateManualRoute } from "./services/routeGenerator";
 
-// Simple function to calculate a destination point given distance and bearing
-function destinationPoint(
-  [lat, lng]: [number, number],
-  distanceMeters: number,
-  bearingDegrees: number
-): [number, number] {
-  const R = 6371e3; // Earth radius in meters
-  const δ = distanceMeters / R;
-  const θ = (bearingDegrees * Math.PI) / 180;
-  const φ1 = (lat * Math.PI) / 180;
-  const λ1 = (lng * Math.PI) / 180;
-
-  const φ2 = Math.asin(
-    Math.sin(φ1) * Math.cos(δ) + Math.cos(φ1) * Math.sin(δ) * Math.cos(θ)
-  );
-  const λ2 =
-    λ1 +
-    Math.atan2(
-      Math.sin(θ) * Math.sin(δ) * Math.cos(φ1),
-      Math.cos(δ) - Math.sin(φ1) * Math.sin(φ2)
-    );
-
-  return [(φ2 * 180) / Math.PI, ((λ2 * 180) / Math.PI + 540) % 360 - 180];
+// Custom icon for numbered waypoints
+function createWaypointIcon(number: number): L.Icon<L.DivIconOptions> {
+  return L.divIcon({
+    className: "custom-marker",
+    html: `<div style="
+      background-color: #3b82f6;
+      color: white;
+      border-radius: 50%;
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      font-size: 12px;
+      border: 2px solid white;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    ">${number}</div>`,
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+    popupAnchor: [0, -14],
+  });
 }
 
-const DEFAULT_POSITION: LatLngExpression = [51.505, -0.09];
+interface Waypoint {
+  position: [number, number];
+}
 
-function RecenterMap({ position }: { position: LatLngExpression }) {
-  const map = useMap();
-
-  useEffect(() => {
-    map.setView(position, 15, { animate: true });
-  }, [position, map]);
-
-  return null;
+function getWaypointLabel(index: number): string {
+  return index === 0 ? "Start/Finish" : `Waypoint ${index}`;
 }
 
 export default function OSMMap() {
-    const [position, setPosition] = useState<LatLngExpression | null>(null);
+  const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
   const [route, setRoute] = useState<LatLngExpression[] | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [cooldownRemaining, setCooldownRemaining] = useState(0);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [routeInfo, setRouteInfo] = useState<{ distance: number; duration: number } | null>(null);
+
+  const MAX_WAYPOINTS = 4; // Start/Finish + up to 3 intermediate (5 total points in URL)
 
   // Cooldown countdown timer
   useEffect(() => {
@@ -72,163 +68,267 @@ export default function OSMMap() {
     return () => clearInterval(interval);
   }, [cooldownRemaining]);
 
+  // Clear error message after 5 seconds
   useEffect(() => {
-    if (!navigator.geolocation) return;
+    if (!errorMessage) return;
+    const timer = setTimeout(() => setErrorMessage(null), 5000);
+    return () => clearTimeout(timer);
+  }, [errorMessage]);
 
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const start: LatLngExpression = [
-          pos.coords.latitude,
-          pos.coords.longitude,
-        ];
-        setPosition(start);
+  const handleMapClick = (latlng: LatLngExpression) => {
+    // If we have waypoints and user clicks, add a new waypoint
+    if (waypoints.length < MAX_WAYPOINTS) {
+      // Safely extract coordinates from Leaflet's LatLngExpression type
+      const lat = Array.isArray(latlng) ? (latlng[0] as number) : latlng.lat;
+      const lng = Array.isArray(latlng) ? (latlng[1] as number) : latlng.lng;
+      const position: [number, number] = [lat, lng];
 
-                // Fetch a pedestrian loop via GraphHopper
-        handleReroute();
-      },
-      () => {
-        setPosition(DEFAULT_POSITION);
-      }
-    );
-  }, []);
+      setWaypoints([...waypoints, { position }]);
+      setRoute(null); // Clear existing route when waypoints change
+      setRouteInfo(null);
+    } else {
+      setErrorMessage(`Maximum ${MAX_WAYPOINTS} points reached. Remove a waypoint or generate the route.`);
+    }
+  };
 
-    async function handleReroute() {
-    if (!position || isGenerating || cooldownRemaining > 0) return;
+  const removeWaypoint = (index: number) => {
+    setWaypoints(waypoints.filter((_, i) => i !== index));
+    setRoute(null);
+    setRouteInfo(null);
+  };
+
+  async function handleGenerateRoute() {
+    if (waypoints.length < 2 || isGenerating || cooldownRemaining > 0) return;
+    
     setIsGenerating(true);
-    setCooldownRemaining(10); // Start 10 second cooldown
+    setCooldownRemaining(10);
+    setErrorMessage(null);
     try {
-      await fetchGraphHopperLoop(position, 5); // 5 km target distance
+      const positions = waypoints.map((wp) => wp.position);
+      const result = await generateManualRoute({ waypoints: positions });
+      setRoute(result.coords);
+      setRouteInfo({ distance: result.distanceKm, duration: result.durationMinutes });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "An unexpected error occurred";
+      setErrorMessage(message);
     } finally {
       setIsGenerating(false);
     }
   }
 
-  function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+  // Get map center from first waypoint or default
+  const mapCenter: LatLngExpression = waypoints.length > 0 
+    ? waypoints[0].position 
+    : DEFAULT_POSITION;
 
-
-  async function fetchGraphHopperLoop(
-    start: LatLngExpression,
-    distanceKm: number
-  ) {
-    const [startLat, startLng] = start as [number, number];
-    const tolerance = 0.1;
-    const maxAttempts = 3;
-    const delayMs = 2000;
-
-    let bestRoute: {
-      coords: LatLngExpression[];
-      distanceKm: number;
-    } | null = null;
-
-    const baseRadius = distanceKm * 1000 * 0.16;
-
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const baseBearing = (Math.random() * 360 + attempt * 45) % 360;
-      const radiusMeters = baseRadius * (1 - attempt * 0.12);
-      
-      const wp1 = destinationPoint(start as [number, number], radiusMeters, baseBearing);
-      const wp2 = destinationPoint(start as [number, number], radiusMeters, baseBearing + 120);
-      const wp3 = destinationPoint(start as [number, number], radiusMeters, baseBearing + 240);
-
-      const url =
-        `https://graphhopper.com/api/1/route` +
-        `?point=${startLat},${startLng}` +
-        `&point=${wp1[0]},${wp1[1]}` +
-        `&point=${wp2[0]},${wp2[1]}` +
-        `&point=${wp3[0]},${wp3[1]}` +
-        `&point=${startLat},${startLng}` +
-        `&profile=foot` +
-        `&points_encoded=false` +
-        `&key=${process.env.NEXT_PUBLIC_GRAPHHOPPER_KEY}`;
-
-      try {
-        const res = await fetch(url);
-        const data = await res.json();
-
-        if (!data.paths?.length) {
-          await new Promise((r) => setTimeout(r, delayMs));
-          continue;
-        }
-
-        const path = data.paths[0];
-        const actualKm = path.distance / 1000;
-
-        const coords = path.points.coordinates.map(
-          ([lng, lat]: [number, number]) => [lat, lng]
-        );
-
-        const error = Math.abs(actualKm - distanceKm);
-
-        if (
-          actualKm >= distanceKm * (1 - tolerance) &&
-          actualKm <= distanceKm * (1 + tolerance)
-        ) {
-          console.log(`Accepted route on attempt ${attempt + 1}: ${actualKm.toFixed(2)} km`);
-          setRoute(coords);
-          return;
-        }
-
-        if (!bestRoute || error < Math.abs(bestRoute.distanceKm - distanceKm)) {
-          bestRoute = { coords, distanceKm: actualKm };
-        }
-
-        console.log(`Attempt ${attempt + 1}: ${actualKm.toFixed(2)} km`);
-      } catch (err) {
-        console.error("GraphHopper error:", err);
-      }
-
-      await new Promise((r) => setTimeout(r, delayMs));
-    }
-
-    if (bestRoute) {
-      console.warn(`Using closest match: ${bestRoute.distanceKm.toFixed(2)} km`);
-      setRoute(bestRoute.coords);
-    }
-  }
-
-    return (
+  return (
     <>
+      {/* Controls Panel */}
+      <div style={{
+        marginBottom: "1rem",
+        padding: "1rem",
+        backgroundColor: "#f8fafc",
+        borderRadius: "0.5rem",
+        border: "1px solid #e2e8f0",
+      }}>
+        <h3 style={{ margin: "0 0 0.75rem 0", fontSize: "1rem" }}>Manual Waypoint Routing</h3>
+        
+        {/* Waypoint list */}
+        {waypoints.length > 0 && (
+          <div style={{ marginBottom: "0.75rem", padding: "0.5rem", backgroundColor: "#fff", borderRadius: "0.375rem", border: "1px solid #e5e7eb" }}>
+            <div style={{ fontSize: "0.75rem", color: "#6b7280", marginBottom: "0.25rem" }}>
+              Waypoints ({waypoints.length}/{MAX_WAYPOINTS}):
+            </div>
+            {waypoints.map((wp, index) => (
+              <div key={index} style={{ 
+                display: "flex", 
+                alignItems: "center", 
+                gap: "0.5rem",
+                padding: "0.25rem 0",
+                fontSize: "0.875rem",
+              }}>
+                <span style={{ 
+                  backgroundColor: index === 0 ? "#ef4444" : "#3b82f6",
+                  color: "white",
+                  borderRadius: "50%",
+                  width: "20px",
+                  height: "20px",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: "11px",
+                  fontWeight: "bold",
+                }}>
+                  {index === 0 ? "📍" : index}
+                </span>
+                <span style={{ flex: 1 }}>{getWaypointLabel(index)}</span>
+                <span style={{ color: "#6b7280", fontSize: "0.75rem" }}>
+                  [{wp.position[0].toFixed(4)}, {wp.position[1].toFixed(4)}]
+                </span>
+                <button 
+                  onClick={() => removeWaypoint(index)}
+                  style={{
+                    background: "#fee2e2",
+                    border: "none",
+                    borderRadius: "4px",
+                    padding: "2px 6px",
+                    cursor: "pointer",
+                    fontSize: "12px",
+                    color: "#991b1b",
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
+          {/* Generate Button */}
+          <button
+            onClick={handleGenerateRoute}
+            disabled={waypoints.length < 2 || isGenerating || cooldownRemaining > 0}
+            style={{
+              padding: "0.5rem 1rem",
+              backgroundColor: (waypoints.length >= 2 && cooldownRemaining === 0) ? "#3b82f6" : "#9ca3af",
+              color: "white",
+              border: "none",
+              borderRadius: "0.375rem",
+              cursor: (waypoints.length >= 2 && cooldownRemaining === 0) ? "pointer" : "not-allowed",
+              fontSize: "0.875rem",
+              fontWeight: 500,
+            }}
+          >
+            {isGenerating 
+              ? "⏳ Generating..." 
+              : cooldownRemaining > 0 
+                ? `⏱️ Cooldown: ${cooldownRemaining}s` 
+                : "🗺️ Generate Route"}
+          </button>
+
+          {/* Clear All Button */}
+          <button
+            onClick={() => {
+              setWaypoints([]);
+              setRoute(null);
+              setRouteInfo(null);
+            }}
+            disabled={waypoints.length === 0 || isGenerating}
+            style={{
+              padding: "0.5rem 1rem",
+              backgroundColor: waypoints.length > 0 ? "#6b7280" : "#9ca3af",
+              color: "white",
+              border: "none",
+              borderRadius: "0.375rem",
+              cursor: waypoints.length > 0 && !isGenerating ? "pointer" : "not-allowed",
+              fontSize: "0.875rem",
+              fontWeight: 500,
+            }}
+          >
+            🗑️ Clear All
+          </button>
+
+          {/* Instructions */}
+          <div style={{ marginLeft: "auto", fontSize: "0.75rem", color: "#6b7280" }}>
+            💡 Click map to add points (max {MAX_WAYPOINTS}) • First = Start/Finish, rest = Waypoints
+          </div>
+        </div>
+      </div>
+
+      {/* Route Info */}
+      {routeInfo && (
+        <div style={{
+          marginBottom: "1rem",
+          padding: "0.75rem 1rem",
+          backgroundColor: "#ecfdf5",
+          color: "#065f46",
+          borderRadius: "0.375rem",
+          fontSize: "0.875rem",
+        }}>
+          <strong>Route:</strong> {routeInfo.distance.toFixed(2)} km • ~{Math.round(routeInfo.duration)} min walk
+        </div>
+      )}
+
+      {/* Error Message */}
+      {errorMessage && (
+        <div style={{
+          marginBottom: "1rem",
+          padding: "0.75rem 1rem",
+          backgroundColor: "#fee2e2",
+          color: "#991b1b",
+          borderRadius: "0.375rem",
+          fontSize: "0.875rem",
+        }}>
+          ⚠️ {errorMessage}
+        </div>
+      )}
+
+      {/* Map */}
       <MapContainer
-        center={position ?? DEFAULT_POSITION}
-        zoom={15}
-        style={{ height: "400px", width: "100%" }}
+        center={mapCenter}
+        zoom={waypoints.length > 0 ? 14 : 13}
+        style={{ height: "400px", width: "100%", borderRadius: "0.5rem" }}
       >
         <TileLayer
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           attribution="© OpenStreetMap contributors"
         />
 
-        {position && (
-          <>
-            <RecenterMap position={position} />
+        {waypoints.map((wp, index) => (
+          <Marker 
+            key={index}
+            position={wp.position} 
+            icon={createWaypointIcon(index === 0 ? 0 : index)}
+          >
+            <Popup>
+              <strong>{getWaypointLabel(index)}</strong><br />
+              {wp.position[0].toFixed(6)}, {wp.position[1].toFixed(6)}
+            </Popup>
+          </Marker>
+        ))}
 
-            <Marker position={position}>
-              <Popup>Start / Finish 📍</Popup>
-            </Marker>
-          </>
+        {/* Draw preview line connecting waypoints */}
+        {waypoints.length >= 2 && (
+          <Polyline 
+            positions={waypoints.map((wp) => wp.position)} 
+            color="#ef4444" 
+            weight={2}
+            dashArray="8, 8"
+          />
         )}
 
-        {route && <Polyline positions={route} />}
+        {/* Draw route line when generated */}
+        {route && <Polyline positions={route} color="#3b82f6" weight={4} />}
+        
+        {/* Enable map clicking to add waypoints */}
+        <MapClickHandler onMapClick={handleMapClick} />
       </MapContainer>
 
-            <button
-        onClick={handleReroute}
-        disabled={isGenerating || !position || cooldownRemaining > 0}
-        style={{
-          marginTop: "0.5rem",
-          padding: "0.5rem 1rem",
-          cursor: (position && cooldownRemaining === 0) ? "pointer" : "not-allowed",
-          opacity: position && cooldownRemaining === 0 ? 1 : 0.5,
-        }}
-      >
-                {isGenerating 
-          ? "Generating route..." 
-          : cooldownRemaining > 0 
-            ? `⏳ Cooldown: ${cooldownRemaining}s` 
-            : "🔄 Reroute"}
-      </button>
+      {/* Status Message */}
+      {waypoints.length === 0 && (
+        <div style={{ marginTop: "1rem", textAlign: "center", color: "#6b7280" }}>
+          📍 Click on the map to place your starting point, then add waypoints.
+        </div>
+      )}
+
+      {waypoints.length > 0 && waypoints.length < MAX_WAYPOINTS && (
+        <div style={{ marginTop: "1rem", textAlign: "center", color: "#6b7280" }}>
+          📍 {waypoints.length}/{MAX_WAYPOINTS} point{waypoints.length !== 1 ? 's' : ''} placed. Click map to add more, or generate route with {waypoints.length >= 2 ? 'current points' : 'at least one waypoint'}.
+        </div>
+      )}
+
+      {waypoints.length === MAX_WAYPOINTS && (
+        <div style={{ marginTop: "1rem", textAlign: "center", color: "#3b82f6" }}>
+          ✅ All {MAX_WAYPOINTS} points placed! Generate route or remove points to add more.
+        </div>
+      )}
+
+      {waypoints.length >= 2 && !route && (
+        <div style={{ marginTop: "0.5rem", textAlign: "center", color: "#10b981" }}>
+          🗺️ Ready to generate! Click the button above.
+        </div>
+      )}
     </>
   );
 }
