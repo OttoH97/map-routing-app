@@ -1,20 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { MapContainer, TileLayer, Marker, Popup, Polyline } from "react-leaflet";
 import type { LatLngExpression } from "leaflet";
 import L from "leaflet";
 import "./leafletIconFix";
 import { DEFAULT_POSITION } from "./components/RecenterMap";
 import { MapClickHandler } from "./components/MapClickHandler";
-import { generateManualRoute } from "./services/routeGenerator";
+import { generateManualRoute, type RouteResult } from "./services/routeGenerator";
+import { ElevationProfile } from "./components/ElevationProfile";
+import { DistanceMarkers } from "./components/DistanceMarkers";
+import { calculateDistanceMarkers } from "./utils/distanceMarkers";
 
-// Custom icon for numbered waypoints
+// Custom icon for numbered waypoints using CSS variables for theme support
 function createWaypointIcon(number: number): L.Icon<L.DivIconOptions> {
   return L.divIcon({
     className: "custom-marker",
     html: `<div style="
-      background-color: #3b82f6;
+      background-color: var(--color-accent, #e04000);
       color: white;
       border-radius: 50%;
       width: 24px;
@@ -43,11 +46,10 @@ function getWaypointLabel(index: number): string {
 
 export default function OSMMap() {
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
-  const [route, setRoute] = useState<LatLngExpression[] | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [cooldownRemaining, setCooldownRemaining] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [routeInfo, setRouteInfo] = useState<{ distance: number; duration: number } | null>(null);
+  const [routeResult, setRouteResult] = useState<RouteResult | null>(null);
 
   const MAX_WAYPOINTS = 4; // Start/Finish + up to 3 intermediate (5 total points in URL)
 
@@ -84,8 +86,7 @@ export default function OSMMap() {
       const position: [number, number] = [lat, lng];
 
       setWaypoints([...waypoints, { position }]);
-      setRoute(null); // Clear existing route when waypoints change
-      setRouteInfo(null);
+      setRouteResult(null); // Clear existing route when waypoints change
     } else {
       setErrorMessage(`Maximum ${MAX_WAYPOINTS} points reached. Remove a waypoint or generate the route.`);
     }
@@ -93,21 +94,19 @@ export default function OSMMap() {
 
   const removeWaypoint = (index: number) => {
     setWaypoints(waypoints.filter((_, i) => i !== index));
-    setRoute(null);
-    setRouteInfo(null);
+    setRouteResult(null);
   };
 
   async function handleGenerateRoute() {
     if (waypoints.length < 2 || isGenerating || cooldownRemaining > 0) return;
-    
+
     setIsGenerating(true);
     setCooldownRemaining(10);
     setErrorMessage(null);
     try {
       const positions = waypoints.map((wp) => wp.position);
       const result = await generateManualRoute({ waypoints: positions });
-      setRoute(result.coords);
-      setRouteInfo({ distance: result.distanceKm, duration: result.durationMinutes });
+      setRouteResult(result);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "An unexpected error occurred";
       setErrorMessage(message);
@@ -116,66 +115,45 @@ export default function OSMMap() {
     }
   }
 
+  // Memoize distance markers to avoid recalculation on every render
+  const distanceMarkers = useMemo(() => {
+    if (!routeResult?.coords) return [];
+    return calculateDistanceMarkers(routeResult.coords, 0.5);
+  }, [routeResult]);
+
   // Get map center from first waypoint or default
-  const mapCenter: LatLngExpression = waypoints.length > 0 
-    ? waypoints[0].position 
+  const mapCenter: LatLngExpression = waypoints.length > 0
+    ? waypoints[0].position
     : DEFAULT_POSITION;
 
   return (
     <>
       {/* Controls Panel */}
-      <div style={{
-        marginBottom: "1rem",
-        padding: "1rem",
-        backgroundColor: "#f8fafc",
-        borderRadius: "0.5rem",
-        border: "1px solid #e2e8f0",
-      }}>
-        <h3 style={{ margin: "0 0 0.75rem 0", fontSize: "1rem" }}>Manual Waypoint Routing</h3>
-        
+      <div className="mb-4 p-4 bg-slate-50 border border-slate-200 rounded-lg">
+        <h3 className="m-0 mb-3 text-sm font-medium text-slate-800">Manual Waypoint Routing</h3>
+
         {/* Waypoint list */}
         {waypoints.length > 0 && (
-          <div style={{ marginBottom: "0.75rem", padding: "0.5rem", backgroundColor: "#fff", borderRadius: "0.375rem", border: "1px solid #e5e7eb" }}>
-            <div style={{ fontSize: "0.75rem", color: "#6b7280", marginBottom: "0.25rem" }}>
+          <div className="mb-3 p-2 bg-white border border-slate-100 rounded-md">
+            <div className="text-xs text-slate-500 mb-1">
               Waypoints ({waypoints.length}/{MAX_WAYPOINTS}):
             </div>
             {waypoints.map((wp, index) => (
-              <div key={index} style={{ 
-                display: "flex", 
-                alignItems: "center", 
-                gap: "0.5rem",
-                padding: "0.25rem 0",
-                fontSize: "0.875rem",
-              }}>
-                <span style={{ 
-                  backgroundColor: index === 0 ? "#ef4444" : "#3b82f6",
-                  color: "white",
-                  borderRadius: "50%",
-                  width: "20px",
-                  height: "20px",
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: "11px",
-                  fontWeight: "bold",
-                }}>
+              <div key={index} className="flex items-center gap-2 py-1 text-sm">
+                <span
+                  style={{ backgroundColor: index === 0 ? "#ef4444" : "var(--color-accent)" }}
+                  className="text-white rounded-full w-5 h-5 flex items-center justify-center text-[11px] font-bold shrink-0"
+                >
                   {index === 0 ? "📍" : index}
                 </span>
-                <span style={{ flex: 1 }}>{getWaypointLabel(index)}</span>
-                <span style={{ color: "#6b7280", fontSize: "0.75rem" }}>
+                <span className="flex-1 text-slate-700">{getWaypointLabel(index)}</span>
+                <span className="text-xs text-slate-500 font-mono">
                   [{wp.position[0].toFixed(4)}, {wp.position[1].toFixed(4)}]
                 </span>
-                <button 
+                <button
                   onClick={() => removeWaypoint(index)}
-                  style={{
-                    background: "#fee2e2",
-                    border: "none",
-                    borderRadius: "4px",
-                    padding: "2px 6px",
-                    cursor: "pointer",
-                    fontSize: "12px",
-                    color: "#991b1b",
-                  }}
+                  disabled={isGenerating}
+                  className="bg-red-50 border-none rounded px-2 py-0.5 cursor-pointer text-xs text-red-800 hover:bg-red-100 disabled:opacity-50"
                 >
                   ✕
                 </button>
@@ -184,148 +162,149 @@ export default function OSMMap() {
           </div>
         )}
 
-        <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
+        <div className="flex gap-3 flex-wrap items-center">
           {/* Generate Button */}
           <button
             onClick={handleGenerateRoute}
             disabled={waypoints.length < 2 || isGenerating || cooldownRemaining > 0}
-            style={{
-              padding: "0.5rem 1rem",
-              backgroundColor: (waypoints.length >= 2 && cooldownRemaining === 0) ? "#3b82f6" : "#9ca3af",
-              color: "white",
-              border: "none",
-              borderRadius: "0.375rem",
-              cursor: (waypoints.length >= 2 && cooldownRemaining === 0) ? "pointer" : "not-allowed",
-              fontSize: "0.875rem",
-              fontWeight: 500,
-            }}
+            style={{ backgroundColor: (waypoints.length >= 2 && cooldownRemaining === 0) ? "var(--color-accent)" : "#9ca3af" }}
+            className="px-4 py-2 text-white border-none rounded-md cursor-pointer text-sm font-medium disabled:cursor-not-allowed hover:brightness-110 transition-all"
           >
-            {isGenerating 
-              ? "⏳ Generating..." 
-              : cooldownRemaining > 0 
-                ? `⏱️ Cooldown: ${cooldownRemaining}s` 
-                : "🗺️ Generate Route"}
+            {isGenerating
+              ? "Generating..."
+              : cooldownRemaining > 0
+                ? `Cooldown: ${cooldownRemaining}s`
+                : "Generate Route"}
           </button>
 
           {/* Clear All Button */}
           <button
             onClick={() => {
               setWaypoints([]);
-              setRoute(null);
-              setRouteInfo(null);
+              setRouteResult(null);
             }}
             disabled={waypoints.length === 0 || isGenerating}
-            style={{
-              padding: "0.5rem 1rem",
-              backgroundColor: waypoints.length > 0 ? "#6b7280" : "#9ca3af",
-              color: "white",
-              border: "none",
-              borderRadius: "0.375rem",
-              cursor: waypoints.length > 0 && !isGenerating ? "pointer" : "not-allowed",
-              fontSize: "0.875rem",
-              fontWeight: 500,
-            }}
+            className="px-4 py-2 bg-slate-500 text-white border-none rounded-md cursor-pointer text-sm font-medium hover:bg-slate-600 transition-all disabled:opacity-50"
           >
-            🗑️ Clear All
+            Clear All
           </button>
 
           {/* Instructions */}
-          <div style={{ marginLeft: "auto", fontSize: "0.75rem", color: "#6b7280" }}>
+          <div className="ml-auto text-xs text-slate-500">
             💡 Click map to add points (max {MAX_WAYPOINTS}) • First = Start/Finish, rest = Waypoints
           </div>
         </div>
       </div>
 
       {/* Route Info */}
-      {routeInfo && (
-        <div style={{
-          marginBottom: "1rem",
-          padding: "0.75rem 1rem",
-          backgroundColor: "#ecfdf5",
-          color: "#065f46",
-          borderRadius: "0.375rem",
-          fontSize: "0.875rem",
-        }}>
-          <strong>Route:</strong> {routeInfo.distance.toFixed(2)} km • ~{Math.round(routeInfo.duration)} min walk
+      {routeResult && (
+        <div className="mb-4 p-3 bg-emerald-50 border border-emerald-100 rounded-md text-sm text-emerald-800 flex justify-between items-center">
+          <div>
+            <strong>Route:</strong> {routeResult.distanceKm.toFixed(2)} km • ~{Math.round(routeResult.durationMinutes)} min walk
+          </div>
+          <div className="flex gap-2">
+            {/* Surface Badges */}
+            {routeResult.surfaceBreakdown.slice(0, 3).map((s, i) => (
+              <span key={i} className="px-2 py-1 bg-white border border-emerald-200 rounded text-xs capitalize">
+                {s.surface}: {s.percentage.toFixed(0)}%
+              </span>
+            ))}
+          </div>
         </div>
       )}
 
       {/* Error Message */}
       {errorMessage && (
-        <div style={{
-          marginBottom: "1rem",
-          padding: "0.75rem 1rem",
-          backgroundColor: "#fee2e2",
-          color: "#991b1b",
-          borderRadius: "0.375rem",
-          fontSize: "0.875rem",
-        }}>
+        <div className="mb-4 p-3 bg-red-50 border border-red-100 rounded-md text-sm text-red-800">
           ⚠️ {errorMessage}
         </div>
       )}
 
+      {/* Elevation Profile */}
+      {routeResult && routeResult.elevationProfile.length > 0 && (
+        <div className="mb-4 p-4 bg-white border border-slate-200 rounded-lg shadow-sm">
+          <h3 className="text-sm font-medium text-slate-700 mb-2">Elevation Profile</h3>
+          <div className="w-full h-36">
+            <ElevationProfile
+              elevationData={routeResult.elevationProfile}
+              distanceKm={routeResult.distanceKm}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Map */}
-      <MapContainer
-        center={mapCenter}
-        zoom={waypoints.length > 0 ? 14 : 13}
-        style={{ height: "400px", width: "100%", borderRadius: "0.5rem" }}
-      >
-        <TileLayer
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          attribution="© OpenStreetMap contributors"
-        />
-
-        {waypoints.map((wp, index) => (
-          <Marker 
-            key={index}
-            position={wp.position} 
-            icon={createWaypointIcon(index === 0 ? 0 : index)}
-          >
-            <Popup>
-              <strong>{getWaypointLabel(index)}</strong><br />
-              {wp.position[0].toFixed(6)}, {wp.position[1].toFixed(6)}
-            </Popup>
-          </Marker>
-        ))}
-
-        {/* Draw preview line connecting waypoints */}
-        {waypoints.length >= 2 && (
-          <Polyline 
-            positions={waypoints.map((wp) => wp.position)} 
-            color="#ef4444" 
-            weight={2}
-            dashArray="8, 8"
+      <div className="relative rounded-lg overflow-hidden border border-slate-200 shadow-sm">
+        <MapContainer
+          center={mapCenter}
+          zoom={waypoints.length > 0 ? 14 : 13}
+          style={{ height: "400px", width: "100%" }} // MapContainer needs inline styles for dimensions usually, or a wrapper class. I'll keep the style here as it's standard for Leaflet wrappers in React if not using specific CSS modules.
+        >
+          <TileLayer
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            attribution="© OpenStreetMap contributors"
           />
-        )}
 
-        {/* Draw route line when generated */}
-        {route && <Polyline positions={route} color="#3b82f6" weight={4} />}
-        
-        {/* Enable map clicking to add waypoints */}
-        <MapClickHandler onMapClick={handleMapClick} />
-      </MapContainer>
+          {waypoints.map((wp, index) => (
+            <Marker
+              key={index}
+              position={wp.position}
+              icon={createWaypointIcon(index === 0 ? 0 : index)}
+            >
+              <Popup>
+                <strong>{getWaypointLabel(index)}</strong><br />
+                {wp.position[0].toFixed(6)}, {wp.position[1].toFixed(6)}
+              </Popup>
+            </Marker>
+          ))}
+
+          {/* Draw preview line connecting waypoints */}
+          {waypoints.length >= 2 && (
+            <Polyline
+              positions={waypoints.map((wp) => wp.position)}
+              color="#ef4444"
+              weight={2}
+              dashArray="8, 8"
+            />
+          )}
+
+          {/* Draw route line when generated */}
+          {routeResult && <Polyline positions={routeResult.coords} color="var(--color-accent)" weight={5} />}
+
+          {/* Distance Markers */}
+          {routeResult && (
+            <DistanceMarkers
+              markers={distanceMarkers}
+              unit="km"
+            />
+          )}
+
+          {/* Enable map clicking to add waypoints */}
+          <MapClickHandler onMapClick={handleMapClick} />
+        </MapContainer>
+      </div>
 
       {/* Status Message */}
       {waypoints.length === 0 && (
-        <div style={{ marginTop: "1rem", textAlign: "center", color: "#6b7280" }}>
+        <div className="mt-4 text-center text-slate-500">
           📍 Click on the map to place your starting point, then add waypoints.
         </div>
       )}
 
       {waypoints.length > 0 && waypoints.length < MAX_WAYPOINTS && (
-        <div style={{ marginTop: "1rem", textAlign: "center", color: "#6b7280" }}>
+        <div className="mt-4 text-center text-slate-500">
           📍 {waypoints.length}/{MAX_WAYPOINTS} point{waypoints.length !== 1 ? 's' : ''} placed. Click map to add more, or generate route with {waypoints.length >= 2 ? 'current points' : 'at least one waypoint'}.
         </div>
       )}
 
       {waypoints.length === MAX_WAYPOINTS && (
-        <div style={{ marginTop: "1rem", textAlign: "center", color: "#3b82f6" }}>
+        <div className="mt-4 text-center text-blue-600 font-medium">
           ✅ All {MAX_WAYPOINTS} points placed! Generate route or remove points to add more.
         </div>
       )}
 
-      {waypoints.length >= 2 && !route && (
-        <div style={{ marginTop: "0.5rem", textAlign: "center", color: "#10b981" }}>
+      {waypoints.length >= 2 && !routeResult && (
+        <div className="mt-2 text-center text-emerald-600">
           🗺️ Ready to generate! Click the button above.
         </div>
       )}

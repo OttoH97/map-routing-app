@@ -1,9 +1,25 @@
 ﻿import type { LatLngExpression } from "leaflet";
 
+export interface ElevationPoint {
+  lat: number;
+  lng: number;
+  elevation: number; // meters
+}
+
+export interface SurfaceInfo {
+  surface: string;
+  lengthMeters: number;
+  percentage: number;
+}
+
 export interface RouteResult {
   coords: LatLngExpression[];
   distanceKm: number;
   durationMinutes: number;
+  elevationGain: number; // total ascent in meters
+  elevationLoss: number; // total descent in meters
+  elevationProfile: ElevationPoint[]; // sampled points for chart
+  surfaceBreakdown: SurfaceInfo[]; // breakdown by surface type
 }
 
 export interface ManualRouteOptions {
@@ -45,10 +61,8 @@ export async function generateManualRoute(
     pointParams +
     `&profile=foot` +
     `&vehicle=foot` +
-    `&points_encoded=false`;
-
-  console.log("Requesting route through waypoints:", waypoints);
-
+    `&points_encoded=false` +
+    `&elevation=true`; // surface/incline details not supported on this endpoint
   const response = await fetch(url);
 
   if (response.status === 429) {
@@ -76,9 +90,74 @@ export async function generateManualRoute(
   const actualKm = path.distance / 1000;
   const durationMinutes = (path.time || 0) / 60000;
 
+
+
+  // Parse elevation data from coordinates.
+    // When points_encoded=false & elevation=true, each coordinate is [lng, lat, elevation].
+    let elevationGain = 0;
+    let elevationLoss = 0;
+    let elevationProfile: ElevationPoint[] = [];
+
+    if (path.points?.coordinates) {
+      const coordinates = path.points.coordinates as [number, number, number][] | [number, number][];
+      
+      // Sample elevation points (every Nth point to avoid too many data points)
+      const sampleInterval = Math.max(1, Math.floor(coordinates.length / 200));
+
+      let lastElevation: number | null = null;
+      coordinates.forEach((coord, index) => {
+        // Extract elevation from the third value if present (3D point)
+        const elevation = coord[2] !== undefined ? coord[2] : null;
+
+        if (elevation !== null && index % sampleInterval === 0) {
+          const [lng, lat] = coord as [number, number];
+          
+          elevationProfile.push({ lat, lng, elevation });
+
+          // Calculate gain/loss
+          if (lastElevation !== null) {
+            const diff = elevation - lastElevation;
+            if (diff > 0) elevationGain += diff;
+            else elevationLoss += Math.abs(diff);
+          }
+          lastElevation = elevation;
+        }
+      });
+    }
+
+  // Parse surface details if available
+  let surfaceBreakdown: SurfaceInfo[] = [];
+
+  if (path.details?.segments) {
+    const surfaceMap = new Map<string, number>();
+
+    path.details.segments.forEach((segment: any) => {
+      if (segment.surface) {
+        const currentLength = surfaceMap.get(segment.surface) || 0;
+        surfaceMap.set(segment.surface, currentLength + segment.distance);
+      }
+    });
+
+    const totalDistance = path.distance;
+    surfaceBreakdown = Array.from(surfaceMap.entries()).map(([surface, lengthMeters]) => ({
+      surface,
+      lengthMeters,
+      percentage: (lengthMeters / totalDistance) * 100
+    }));
+  }
+
   const coords = path.points.coordinates.map(
     ([lng, lat]: [number, number]) => [lat, lng] as LatLngExpression
   );
 
-  return { coords, distanceKm: actualKm, durationMinutes };
+  return {
+    coords,
+    distanceKm: actualKm,
+    durationMinutes,
+    elevationGain,
+    elevationLoss,
+    elevationProfile,
+    surfaceBreakdown
+  };
 }
+
