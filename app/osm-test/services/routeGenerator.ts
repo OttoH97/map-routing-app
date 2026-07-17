@@ -6,12 +6,6 @@ export interface ElevationPoint {
   elevation: number; // meters
 }
 
-export interface SurfaceInfo {
-  surface: string;
-  lengthMeters: number;
-  percentage: number;
-}
-
 export interface RouteResult {
   coords: LatLngExpression[];
   distanceKm: number;
@@ -19,7 +13,6 @@ export interface RouteResult {
   elevationGain: number; // total ascent in meters
   elevationLoss: number; // total descent in meters
   elevationProfile: ElevationPoint[]; // sampled points for chart
-  surfaceBreakdown: SurfaceInfo[]; // breakdown by surface type
 }
 
 export interface ManualRouteOptions {
@@ -62,7 +55,7 @@ export async function generateManualRoute(
     `&profile=foot` +
     `&vehicle=foot` +
     `&points_encoded=false` +
-    `&elevation=true`; // surface/incline details not supported on this endpoint
+    `&elevation=true`;
   const response = await fetch(url);
 
   if (response.status === 429) {
@@ -125,27 +118,6 @@ export async function generateManualRoute(
       });
     }
 
-  // Parse surface details if available
-  let surfaceBreakdown: SurfaceInfo[] = [];
-
-  if (path.details?.segments) {
-    const surfaceMap = new Map<string, number>();
-
-    path.details.segments.forEach((segment: any) => {
-      if (segment.surface) {
-        const currentLength = surfaceMap.get(segment.surface) || 0;
-        surfaceMap.set(segment.surface, currentLength + segment.distance);
-      }
-    });
-
-    const totalDistance = path.distance;
-    surfaceBreakdown = Array.from(surfaceMap.entries()).map(([surface, lengthMeters]) => ({
-      surface,
-      lengthMeters,
-      percentage: (lengthMeters / totalDistance) * 100
-    }));
-  }
-
   const coords = path.points.coordinates.map(
     ([lng, lat]: [number, number]) => [lat, lng] as LatLngExpression
   );
@@ -157,7 +129,6 @@ export async function generateManualRoute(
     elevationGain,
     elevationLoss,
     elevationProfile,
-    surfaceBreakdown
   };
 }
 

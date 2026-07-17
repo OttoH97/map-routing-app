@@ -13,7 +13,7 @@ export default function OsmTestPage() {
       <div style={{ marginBottom: "1rem" }}>
         <Link
           href="/"
-          className="text-blue-600 underline hover:text-blue-800 transition-colors duration-200"
+          className="text-[var(--color-accent)] underline hover:text-[var(--color-accent-hover)] transition-colors duration-200"
         >
           ← Back to Home
         </Link>

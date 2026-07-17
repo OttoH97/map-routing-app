@@ -15,7 +15,7 @@ function createDistanceMarkerIcon(distance: number, unit: "km" | "mi"): any {
 
   return divIcon({
     className: "distance-marker",
-    html: `<div style="background-color: #e04000; color: white; border-radius: 12px; padding: 2px 6px; font-weight: bold; font-size: 10px; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3); white-space: nowrap;">${label}</div>`,
+    html: `<div style="background-color: var(--color-secondary, #7A1B3E); color: white; border-radius: 12px; padding: 2px 6px; font-weight: bold; font-size: 10px; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3); white-space: nowrap;">${label}</div>`,
     iconSize: [40, 20] as const,
     iconAnchor: [20, 10] as const,
     popupAnchor: [0, -10] as const,

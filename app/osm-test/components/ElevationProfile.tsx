@@ -42,7 +42,7 @@ export function ElevationProfile({ elevationData, distanceKm }: ElevationProfile
 
   if (!chartData || elevationData.length < 2) {
     return (
-      <div className="text-sm text-gray-500 italic">No elevation data available</div>
+      <div className="text-sm text-[var(--foreground)]/50 italic">No elevation data available</div>
     );
   }
 
@@ -56,7 +56,7 @@ export function ElevationProfile({ elevationData, distanceKm }: ElevationProfile
         style={{ height: "150px", display: "block" }}
       >
         {/* Background */}
-        <rect x="0" y="0" width={width} height={height} fill="#f8fafc" rx="4" />
+        <rect x="0" y="0" width={width} height={height} fill="var(--background)" rx="4" />
         
         {/* Grid lines - using proper chart dimensions */}
         {[0, 0.25, 0.5, 0.75, 1].map((ratio) => (
@@ -66,27 +66,27 @@ export function ElevationProfile({ elevationData, distanceKm }: ElevationProfile
             y1={padding.top + ratio * chartHeight}
             x2={padding.left + chartWidth}
             y2={padding.top + ratio * chartHeight}
-            stroke="#e2e8f0"
+            style={{ stroke: "var(--foreground)", opacity: 0.2 }}
             strokeWidth="1"
           />
         ))}
 
         {/* Elevation fill */}
-        <path d={fillPathD} fill="#606040" opacity="0.3" />
+        <path d={fillPathD} fill="var(--color-accent)" opacity="0.3" />
         
         {/* Elevation line */}
         <path 
           d={pathD} 
           fill="none" 
-          stroke="#606040" 
+          stroke="var(--color-accent)"
           strokeWidth="2"
           strokeLinecap="round"
           strokeLinejoin="round"
         />
 
         {/* Y-axis labels - positioned within padding */}
-        <text x={padding.left - 5} y={padding.top + 4} fontSize="10" fill="#6b7280">{Math.round(maxElev)}m</text>
-        <text x={padding.left - 5} y={padding.top + chartHeight + 4} fontSize="10" fill="#6b7280">{Math.round(minElev)}m</text>
+        <text x={padding.left - 5} y={padding.top + 4} fontSize="16" style={{ fill: "var(--foreground)", opacity: 0.8 }}>{Math.round(maxElev)}m</text>
+        <text x={padding.left - 5} y={padding.top + chartHeight + 4} fontSize="16" style={{ fill: "var(--foreground)", opacity: 0.8 }}>{Math.round(minElev)}m</text>
 
         {/* X-axis labels */}
         {[0, 0.5, 1].map((ratio) => (
@@ -94,8 +94,8 @@ export function ElevationProfile({ elevationData, distanceKm }: ElevationProfile
             key={ratio}
             x={padding.left + ratio * chartWidth}
             y={height - 8}
-            fontSize="10"
-            fill="#6b7280"
+            fontSize="14"
+            style={{ fill: "var(--foreground)", opacity: 0.8 }}
             textAnchor="middle"
           >
             {(distanceKm * ratio).toFixed(1)}km
